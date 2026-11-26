@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := make(map[sim.Scenario]*sim.Result, len(cfgs))
-	last := 0
+	lastPurchase := 0
 	for i, cfg := range cfgs {
 		res, err := sim.Run(cfg)
 		if err != nil {
@@ -53,9 +54,13 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		results[scenarios[i]] = res
-		last = max(last, lastActiveSecond(res))
+		lastPurchase = max(lastPurchase, lastPurchaseSecond(res))
 	}
-	end := min(last+5, len(results[scenarios[0]].Seconds))
+	// The chart stops a few seconds after the last purchase. Without
+	// protection, buyers can keep failing for minutes after that; those
+	// seconds are folded into a single "tail" event so the totals still add up.
+	total := len(results[scenarios[0]].Seconds)
+	end := min(max(lastPurchase+chartMargin, minChartSeconds), total)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -64,6 +69,11 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+
+	if err := sendEvent(w, "start", map[string]int{"seconds": end, "capacity": int(cfgs[0].Capacity())}); err != nil {
+		return
+	}
+	flusher.Flush()
 
 	tick := time.NewTicker(time.Second / time.Duration(speed))
 	defer tick.Stop()
@@ -82,12 +92,76 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+
+	tail := make(map[sim.Scenario]tailInfo, len(results))
+	for sc, res := range results {
+		tail[sc] = summarizeTail(res.Seconds, end)
+	}
+	sendEvent(w, "tail", tail)
+
+	// A sample of who bought when, for the "who buys first?" chart.
+	points := make(map[sim.Scenario][][2]float64, len(results))
+	for sc, res := range results {
+		step := max(1, len(res.Purchases)/1500)
+		pts := make([][2]float64, 0, len(res.Purchases)/step+1)
+		for i := 0; i < len(res.Purchases); i += step {
+			p := res.Purchases[i]
+			pts = append(pts, [2]float64{float64(p.ArrivalOrder), math.Round(p.BoughtAt*100) / 100})
+		}
+		points[sc] = pts
+	}
+	sendEvent(w, "fairness", points)
+
 	summaries := make([]sim.Summary, 0, len(scenarios))
 	for _, sc := range scenarios {
 		summaries = append(summaries, results[sc].Summary)
 	}
 	sendEvent(w, "summary", summaries)
 	flusher.Flush()
+}
+
+const (
+	chartMargin     = 8  // seconds shown after the last purchase
+	minChartSeconds = 30 // never draw a chart shorter than this
+)
+
+// tailInfo aggregates the seconds after the chart ends.
+type tailInfo struct {
+	Seconds    int        `json:"seconds"`      // how many seconds were folded
+	Totals     sim.Second `json:"totals"`       // counters summed, gauges and tracked buyer from the last second
+	BoughtAt   int        `json:"bought_at"`    // second the tracked buyer bought, -1 if not in the tail
+	LastGaveUp int        `json:"last_gave_up"` // last second in which a buyer gave up, -1 if none
+}
+
+func summarizeTail(secs []sim.Second, from int) tailInfo {
+	info := tailInfo{BoughtAt: -1, LastGaveUp: -1}
+	if from >= len(secs) {
+		return info
+	}
+	info.Seconds = len(secs) - from
+	for _, s := range secs[from:] {
+		t := &info.Totals
+		t.Purchases += s.Purchases
+		t.CheckoutRequests += s.CheckoutRequests
+		t.CatalogOK += s.CatalogOK
+		t.CatalogFailed += s.CatalogFailed
+		t.Rejected429 += s.Rejected429
+		t.Rejected503 += s.Rejected503
+		t.Timeouts += s.Timeouts
+		t.Wasted += s.Wasted
+		t.GaveUp += s.GaveUp
+		if s.GaveUp > 0 {
+			info.LastGaveUp = s.T
+		}
+		if s.TrackedState == "bought" && info.BoughtAt < 0 && t.TrackedState != "bought" {
+			info.BoughtAt = s.T
+		}
+		t.BackendQueue, t.RoomSize, t.ActiveUsers = s.BackendQueue, s.RoomSize, s.ActiveUsers
+		t.TrackedState, t.TrackedPosition = s.TrackedState, s.TrackedPosition
+		t.TrackedRequests, t.TrackedErrors = s.TrackedRequests, s.TrackedErrors
+	}
+	info.Totals.T = len(secs) - 1
+	return info
 }
 
 func sendEvent(w http.ResponseWriter, name string, v any) error {
@@ -99,12 +173,11 @@ func sendEvent(w http.ResponseWriter, name string, v any) error {
 	return err
 }
 
-// lastActiveSecond is the last second in which anyone was still buying,
-// waiting, or giving up; after it nothing interesting happens.
-func lastActiveSecond(r *sim.Result) int {
+// lastPurchaseSecond is the last second in which someone bought.
+func lastPurchaseSecond(r *sim.Result) int {
 	last := 0
 	for _, s := range r.Seconds {
-		if s.Purchases > 0 || s.GaveUp > 0 || s.RoomSize > 0 || s.CheckoutRequests > 0 {
+		if s.Purchases > 0 {
 			last = s.T
 		}
 	}

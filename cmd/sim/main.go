@@ -21,7 +21,7 @@ func main() {
 	seed := flag.Int64("seed", 42, "random seed")
 	buyers := flag.Int("buyers", 20000, "number of buyers")
 	queue := flag.String("queue", "fifo", "waiting room queue method: fifo or random")
-	seconds := flag.Int("seconds", 70, "seconds shown in the charts")
+	seconds := flag.Int("seconds", 0, "seconds shown in the charts (0: until a few seconds after the last purchase, like the demo)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*out, 0o755); err != nil {
@@ -45,6 +45,9 @@ func main() {
 	printSummary(results)
 	if err := writeCSV(filepath.Join(*out, "results.csv"), results); err != nil {
 		log.Fatal(err)
+	}
+	if *seconds <= 0 {
+		*seconds = chart.SuggestedSeconds(results)
 	}
 	for _, lang := range []string{"es", "en"} {
 		l := chart.LabelsFor(lang)

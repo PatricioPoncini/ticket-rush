@@ -7,68 +7,106 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main>
-  <header>
-    <h1>Ticket rush</h1>
-    <p class="lede">The sale opens at 20:00 and thousands of buyers arrive in the same few seconds. Pick the protections, open the sale and watch how the checkout behaves. Everything is a deterministic simulation: same parameters, same result.</p>
-  </header>
+<header class="top">
+  <h1>Ticket rush</h1>
+  <p>Tickets go on sale at 20:00 and thousands of buyers arrive in the same few seconds. Pick the protections, open the sale and watch how the checkout copes. It's a deterministic simulation: same parameters, same result.</p>
+</header>
 
-  <form id="controls">
-    <fieldset class="scenarios">
+<div class="layout">
+  <form id="controls" class="controls">
+    <fieldset>
       <legend>Scenarios</legend>
-      <label><input type="checkbox" name="scenario" value="none" checked><span class="key" data-s="none"></span>No protection</label>
-      <label><input type="checkbox" name="scenario" value="ratelimit" checked><span class="key" data-s="ratelimit"></span>Rate limiting</label>
-      <label><input type="checkbox" name="scenario" value="waitingroom" checked><span class="key" data-s="waitingroom"></span>Waiting room</label>
-      <label><input type="checkbox" name="scenario" value="loadshedding" checked><span class="key" data-s="loadshedding"></span>Load shedding</label>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" name="scenario" value="none" checked><span class="key" data-s="none"></span>No protection</label>
+        <label class="chip"><input type="checkbox" name="scenario" value="ratelimit" checked><span class="key" data-s="ratelimit"></span>Rate limiting</label>
+        <label class="chip"><input type="checkbox" name="scenario" value="waitingroom" checked><span class="key" data-s="waitingroom"></span>Waiting room</label>
+        <label class="chip"><input type="checkbox" name="scenario" value="loadshedding" checked><span class="key" data-s="loadshedding"></span>Load shedding</label>
+      </div>
     </fieldset>
-    <div class="params">
-      <label>Buyers <input type="number" name="buyers" value="20000" min="100" max="100000" step="100"></label>
-      <label>Capacity (req/s) <input type="number" name="capacity" value="500" min="50" max="5000" step="50"></label>
-      <label>Room admits (users/s) <input type="number" name="admit" value="350" min="1" max="5000"></label>
-      <label>Room order
-        <select name="queue"><option value="fifo">FIFO</option><option value="random">Random</option></select>
-      </label>
-      <label>Impatient clients (%) <input type="number" name="impatient" value="10" min="0" max="100"></label>
-      <label>Seed <input type="number" name="seed" value="42" min="0"></label>
-      <label>Speed
-        <select name="speed"><option value="5">5×</option><option value="10" selected>10×</option><option value="25">25×</option><option value="100">100×</option></select>
-      </label>
-    </div>
+
+    <fieldset>
+      <legend>Traffic</legend>
+      <div class="fields">
+        <label>Buyers <input type="number" name="buyers" value="20000" min="100" max="100000" step="100"></label>
+        <label>Impatient clients <span class="unit-wrap"><input type="number" name="impatient" value="10" min="0" max="100"><span class="unit">%</span></span></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Backend</legend>
+      <div class="fields">
+        <label>Capacity <span class="unit-wrap"><input type="number" name="capacity" value="500" min="50" max="5000" step="50"><span class="unit">req/s</span></span></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Waiting room</legend>
+      <div class="fields">
+        <label class="wide">Admits <span class="unit-wrap"><input type="number" name="admit" value="350" min="1" max="5000"><span class="unit">users/s</span></span></label>
+        <div class="field wide">
+          <span>Order</span>
+          <div class="segmented">
+            <label><input type="radio" name="queue" value="fifo" checked><span>FIFO</span></label>
+            <label><input type="radio" name="queue" value="random"><span>Random</span></label>
+          </div>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Playback</legend>
+      <div class="fields">
+        <label>Seed <input type="number" name="seed" value="42" min="0"></label>
+        <label>Speed
+          <select name="speed"><option value="5">5×</option><option value="10" selected>10×</option><option value="25">25×</option><option value="100">100×</option></select>
+        </label>
+      </div>
+    </fieldset>
+
     <button type="submit" id="start">Open the sale</button>
+    <p id="form-error" class="form-error" hidden>Pick at least one scenario.</p>
   </form>
 
-  <section class="card">
-    <div class="card-head">
-      <h2>Successful purchases per second</h2>
-      <span id="clock" class="clock">20:00:00</span>
-    </div>
-    <div id="legend" class="legend"></div>
-    <div class="chart-wrap">
-      <canvas id="chart" height="320"></canvas>
-      <div id="tooltip" class="tooltip" hidden></div>
-    </div>
-  </section>
+  <main>
+    <section class="card chart-card">
+      <div class="card-head">
+        <h2>Successful purchases per second</h2>
+        <span id="clock" class="clock">20:00:00</span>
+      </div>
+      <div id="legend" class="legend"></div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div id="tooltip" class="tooltip" hidden></div>
+        <div id="empty" class="empty">Press <strong>Open the sale</strong> to start.</div>
+      </div>
+      <p id="tail-note" class="note" hidden></p>
+    </section>
 
-  <section id="panels" class="panels"></section>
+    <section id="panels" class="panels"></section>
 
-  <section class="card" id="summary-card" hidden>
-    <h2>Summary</h2>
-    <div class="table-wrap">
-      <table id="summary">
-        <thead><tr>
-          <th>Scenario</th><th>Bought</th><th>Gave up</th><th>Wait p50</th><th>Wait p95</th>
-          <th>Requests / buyer</th><th>Errors / buyer</th><th>Catalog OK</th><th>Wasted work</th><th>Fairness</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <p class="note"><strong>Wasted work</strong>: requests the backend finished after the client had stopped waiting. <strong>Fairness</strong>: rank correlation between arrival order and purchase time (1 = strict first come, first served).</p>
-  </section>
+    <section class="card" id="fairness-card" hidden>
+      <div class="card-head"><h2>Who buys first?</h2></div>
+      <p class="sub-head">Each dot is a buyer who got a ticket: arrival order against the second they bought. A straight line means first come, first served.</p>
+      <div id="fairness" class="fairness"></div>
+    </section>
 
-  <footer>
-    <p>The numbers are illustrative parameters of a simulation, not measurements of any real system. See the README for the model and its references.</p>
-  </footer>
-</main>
+    <section class="card" id="summary-card" hidden>
+      <h2>Summary</h2>
+      <div class="table-wrap">
+        <table id="summary">
+          <thead><tr>
+            <th>Scenario</th><th>Bought</th><th>Gave up</th><th>Wait p50</th><th>Wait p95</th>
+            <th>Requests / buyer</th><th>Errors / buyer</th><th>Catalog OK</th><th>Wasted work</th><th>Fairness</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="note"><strong>Wasted work</strong>: requests the backend finished after the client had stopped waiting. <strong>Fairness</strong>: rank correlation between arrival order and purchase time (1 = strict first come, first served).</p>
+    </section>
+
+    <footer>The numbers are illustrative parameters of a simulation, not measurements of any real system. The README describes the model.</footer>
+  </main>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

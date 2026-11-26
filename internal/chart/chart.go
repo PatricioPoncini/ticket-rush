@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/PatricioPoncini/ticket-rush/internal/sim"
@@ -45,7 +46,8 @@ type Labels struct {
 	FairnessSubtitle string
 	FairnessX        string
 	FairnessY        string
-	FairnessNote     string // printed inside a panel; %d is replaced by the number of buyers
+	FairnessNote     string // printed inside a panel; %s is replaced by the number of buyers
+	Thousands        string // thousands separator
 }
 
 // LabelsFor returns the text for "es" or "en".
@@ -67,7 +69,8 @@ func LabelsFor(lang string) Labels {
 			FairnessSubtitle: "Each dot is a buyer who got a ticket: arrival order vs. when they bought",
 			FairnessX:        "arrival order",
 			FairnessY:        "bought at (s)",
-			FairnessNote:     "only %d bought",
+			FairnessNote:     "only %s bought",
+			Thousands:        ",",
 		}
 	}
 	return Labels{
@@ -86,7 +89,8 @@ func LabelsFor(lang string) Labels {
 		FairnessSubtitle: "Cada punto es un comprador que consiguió entrada: orden de llegada vs. cuándo compró",
 		FairnessX:        "orden de llegada",
 		FairnessY:        "compró en (s)",
-		FairnessNote:     "solo compraron %d",
+		FairnessNote:     "solo compraron %s",
+		Thousands:        ".",
 	}
 }
 
@@ -113,14 +117,24 @@ func (s *svg) legend(x, y float64, l Labels, order []sim.Scenario) {
 	}
 }
 
-// Goodput draws purchases per second for every scenario on one axis.
+// Goodput draws purchases per second for every scenario on one axis, with
+// the same look as the interactive demo.
 func Goodput(results []*sim.Result, l Labels, seconds int) string {
-	const W, H = 880, 460
-	const left, right, top, bottom = 64.0, 150.0, 104.0, 56.0
+	const W, H = 880, 440
+	const left, right, top, bottom = 56.0, 24.0, 100.0, 56.0
 	pw, ph := W-left-right, H-top-bottom
 	capacity := results[0].Summary.Capacity
-	yMax := math.Ceil(capacity*1.1/100) * 100
-	x := func(t float64) float64 { return left + t/float64(seconds)*pw }
+	peak := capacity
+	for _, r := range results {
+		for _, sec := range r.Seconds {
+			peak = max(peak, float64(sec.Purchases))
+		}
+	}
+	yStep := niceStep(peak * 1.15 / 4)
+	yMax := math.Ceil(peak*1.15/yStep) * yStep
+	xStep := int(niceStep(float64(seconds) / 8))
+	tMax := (seconds + xStep - 1) / xStep * xStep
+	x := func(t float64) float64 { return left + t/float64(tMax)*pw }
 	y := func(v float64) float64 { return top + ph - v/yMax*ph }
 
 	var s svg
@@ -128,51 +142,54 @@ func Goodput(results []*sim.Result, l Labels, seconds int) string {
 	s.text(24, 36, "start", inkStrong, 18, 600, l.GoodputTitle)
 	s.text(24, 58, "start", inkSoft, 13, 400, l.GoodputSubtitle)
 	order := scenariosOf(results)
-	s.legend(24, 86, l, order)
+	s.legend(24, 84, l, order)
 
-	for v := 0.0; v <= yMax; v += 100 {
-		s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`+"\n", left, y(v), left+pw, y(v), grid)
+	for v := 0.0; v <= yMax; v += yStep {
+		stroke := grid
+		if v == 0 {
+			stroke = axis
+		}
+		s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`+"\n", left, y(v), left+pw, y(v), stroke)
 		s.text(left-8, y(v)+4, "end", inkSoft, 12, 400, fmt.Sprintf("%.0f", v))
 	}
-	s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`+"\n", left, y(0), left+pw, y(0), axis)
-	for t := 0; t <= seconds; t += 10 {
-		s.text(x(float64(t)), top+ph+20, "middle", inkSoft, 12, 400, fmt.Sprint(t))
+	for t := 0; t <= tMax; t += xStep {
+		s.text(x(float64(t)), top+ph+20, "middle", inkSoft, 12, 400, fmt.Sprintf("%ds", t))
 	}
-	s.text(left+pw/2, H-12, "middle", inkSoft, 12, 400, l.SecondsX)
-	s.f(`<text transform="translate(18 %.1f) rotate(-90)" text-anchor="middle" fill="%s" font-size="12">%s</text>`+"\n", top+ph/2, inkSoft, html.EscapeString(l.GoodputY))
+	s.text(left+pw/2, H-10, "middle", inkSoft, 12, 400, l.SecondsX)
 
-	// Capacity reference line.
-	s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`+"\n", left, y(capacity), left+pw, y(capacity), inkSoft)
-	s.text(left+pw+8, y(capacity)+4, "start", inkSoft, 12, 400, fmt.Sprintf("%s %.0f/s", l.CapacityLabel, capacity))
+	// Capacity reference: dashed, labelled inside the plot.
+	s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1" stroke-dasharray="4 4"/>`+"\n", left, y(capacity), left+pw, y(capacity), inkSoft)
+	s.text(left+pw, y(capacity)-6, "end", inkSoft, 12, 400, fmt.Sprintf("%s %.0f/s", l.CapacityLabel, capacity))
 
 	type endLabel struct {
-		y    float64
-		x    float64
+		y, x float64
 		name string
 		sc   sim.Scenario
 	}
 	var labels []endLabel
-	for _, r := range results {
-		var pts []string
-		lastNonZero := 0
-		for t := 0; t <= seconds && t < len(r.Seconds); t++ {
-			v := float64(r.Seconds[t].Purchases)
-			pts = append(pts, fmt.Sprintf("%.1f,%.1f", x(float64(t)+0.5), y(v)))
-			if v > 0 {
-				lastNonZero = t
-			}
+	// Lines that end at zero are drawn first so the ones still selling stay on top.
+	drawOrder := slices.Clone(results)
+	slices.SortStableFunc(drawOrder, func(a, b *sim.Result) int {
+		return lastPurchase(a) - lastPurchase(b)
+	})
+	for _, r := range drawOrder {
+		pts := []string{fmt.Sprintf("%.1f,%.1f", x(0), y(0))}
+		for t := 0; t < seconds && t < len(r.Seconds); t++ {
+			pts = append(pts, fmt.Sprintf("%.1f,%.1f", x(float64(t+1)), y(float64(r.Seconds[t].Purchases))))
 		}
 		s.f(`<polyline points="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`+"\n", strings.Join(pts, " "), colors[r.Summary.Scenario])
-		// Label each line at the last second it was still selling, where the
-		// lines are apart from each other.
-		// A line that collapses early is labeled on the floor, after the
-		// drop, so its label does not sit on top of the others.
-		if lastNonZero < seconds/5 {
-			labels = append(labels, endLabel{y: y(0), x: x(float64(lastNonZero) + 1.5), name: l.Scenario[r.Summary.Scenario], sc: r.Summary.Scenario})
+
+		// Label each line at the last second it was selling at full pace,
+		// where the lines are apart. A line that collapses early is labeled
+		// on the floor, after the drop.
+		last := lastPurchase(r)
+		name := l.Scenario[r.Summary.Scenario]
+		if last < seconds/5 {
+			labels = append(labels, endLabel{y: y(0), x: x(float64(last) + 2), name: name, sc: r.Summary.Scenario})
 			continue
 		}
-		v := float64(r.Seconds[lastNonZero-1].Purchases)
-		labels = append(labels, endLabel{y: y(v), x: x(float64(lastNonZero) + 0.5), name: l.Scenario[r.Summary.Scenario], sc: r.Summary.Scenario})
+		t := plateauEnd(r)
+		labels = append(labels, endLabel{y: y(float64(r.Seconds[t].Purchases)), x: x(float64(t + 1)), name: name, sc: r.Summary.Scenario})
 	}
 	for _, lb := range labels {
 		s.f(`<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="%s" stroke-width="2"/>`+"\n", lb.x, lb.y, colors[lb.sc], surface)
@@ -180,6 +197,61 @@ func Goodput(results []*sim.Result, l Labels, seconds int) string {
 	}
 	s.f("</svg>\n")
 	return s.b.String()
+}
+
+// SuggestedSeconds is the chart window the demo uses: a few seconds after
+// the last purchase in any scenario.
+func SuggestedSeconds(results []*sim.Result) int {
+	last := 0
+	for _, r := range results {
+		last = max(last, lastPurchase(r))
+	}
+	return max(last+8, 30)
+}
+
+func lastPurchase(r *sim.Result) int {
+	last := 0
+	for _, s := range r.Seconds {
+		if s.Purchases > 0 {
+			last = s.T
+		}
+	}
+	return last
+}
+
+// plateauEnd is the last second a scenario was still selling at, or close to,
+// its peak pace: the spot just before its line drops.
+func plateauEnd(r *sim.Result) int {
+	peak := 0
+	for _, s := range r.Seconds {
+		peak = max(peak, s.Purchases)
+	}
+	end := 0
+	for _, s := range r.Seconds {
+		if float64(s.Purchases) >= 0.8*float64(peak) {
+			end = s.T
+		}
+	}
+	return end
+}
+
+// thousands formats n with the given separator: 20000 -> "20.000".
+func thousands(n int, sep string) string {
+	str := fmt.Sprint(n)
+	for i := len(str) - 3; i > 0; i -= 3 {
+		str = str[:i] + sep + str[i:]
+	}
+	return str
+}
+
+func niceStep(raw float64) float64 {
+	p := math.Pow(10, math.Floor(math.Log10(raw)))
+	for _, m := range []float64{1, 2, 5, 10} {
+		if m*p >= raw {
+			return m * p
+		}
+	}
+	return 10 * p
 }
 
 // Fairness draws one small panel per scenario: arrival order on x, purchase
@@ -213,7 +285,7 @@ func Fairness(results []*sim.Result, l Labels, seconds int) string {
 		}
 		s.f(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`+"\n", px, py+ph, px+pw, py+ph, axis)
 		s.text(px, py+ph+16, "start", inkSoft, 11, 400, "1")
-		s.text(px+pw, py+ph+16, "end", inkSoft, 11, 400, fmt.Sprintf("%d", r.Summary.Buyers))
+		s.text(px+pw, py+ph+16, "end", inkSoft, 11, 400, thousands(r.Summary.Buyers, l.Thousands))
 		s.text(px+pw/2, py+ph+16, "middle", inkSoft, 11, 400, l.FairnessX)
 		s.f(`<text transform="translate(%.1f %.1f) rotate(-90)" text-anchor="middle" fill="%s" font-size="11">%s</text>`+"\n", ox+10, py+ph/2, inkSoft, html.EscapeString(l.FairnessY))
 
@@ -228,7 +300,7 @@ func Fairness(results []*sim.Result, l Labels, seconds int) string {
 		}
 		s.f("</g>\n")
 		if r.Summary.Purchased < r.Summary.Buyers/5 {
-			s.text(px+pw/2, py+ph/2, "middle", inkSoft, 12, 400, fmt.Sprintf(l.FairnessNote, r.Summary.Purchased))
+			s.text(px+pw/2, py+ph/2, "middle", inkSoft, 12, 400, fmt.Sprintf(l.FairnessNote, thousands(r.Summary.Purchased, l.Thousands)))
 		}
 	}
 	s.f("</svg>\n")
