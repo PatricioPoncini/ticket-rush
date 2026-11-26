@@ -21,11 +21,10 @@ git clone https://github.com/PatricioPoncini/ticket-rush.git
 cd ticket-rush
 
 go run ./cmd/server     # interactive demo on http://localhost:8080
-go run ./cmd/sim        # headless: prints a summary and writes out/results.csv + SVG charts
 go test ./...           # tests
 ```
 
-Or with `make`: `make run`, `make sim`, `make test`.
+Or with `make`: `make run`, `make test`.
 
 In the demo you choose the scenarios and parameters (buyers, capacity, waiting room admission rate, FIFO or
 random order, share of impatient clients, seed) and press **Open the sale**. The chart shows successful
@@ -35,7 +34,7 @@ they bought or gave up. Opening `http://localhost:8080/#run` starts the sale rig
 
 ## What you should see
 
-With the default parameters (`go run ./cmd/sim`):
+With the default parameters (the summary table at the end of a run in the demo):
 
 | scenario | bought | gave up | wait p50 | wait p95 | requests/buyer | errors/buyer | catalog ok | wasted work | fairness |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -90,9 +89,7 @@ no inventory (everyone can buy), and the backend does not autoscale.
 
 ```
 cmd/server/     HTTP server: embedded UI + /api/run (Server-Sent Events, one frame per simulated second)
-cmd/sim/        headless runner: summary table, out/results.csv, out/goodput-*.svg, out/fairness-*.svg
 internal/sim/   the simulation: config, engine, backend, metrics
-internal/chart/ SVG charts (standard library only)
 web/            UI: index.html, app.js, style.css
 ```
 
